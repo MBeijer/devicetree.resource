@@ -12,6 +12,7 @@ void Add_DT_Memory(struct ExecBase *SysBase, APTR DeviceTreeBase)
 {
     uint64_t base;
     uint64_t size;
+    uint64_t remaining = 0;
     ULONG type;
 
     // Obtain pointer to reg property of /memory. Get base and size
@@ -30,25 +31,48 @@ void Add_DT_Memory(struct ExecBase *SysBase, APTR DeviceTreeBase)
     if (siz)
         size_len = *siz;
 
-    while (pos < length)
+    while (pos < length || remaining)
     {
-        base = 0;
-        size = 0;
-
-        /* Get address and size of the memory block */
-        for (int i = 0; i < addr_len; i++)
+        if (remaining)
         {
-            base = (base << 32) | reg[pos++];
+            base = 0x40000000;
+            size = remaining;
+            remaining = 0;
         }
-
-        for (int i = 0; i < size_len; i++)
+        else
         {
-            size = (size << 32) | reg[pos++];
+            base = 0;
+            size = 0;
+
+            /* Get address and size of the memory block */
+            for (int i = 0; i < addr_len; i++)
+            {
+                base = (base << 32) | reg[pos++];
+            }
+
+            for (int i = 0; i < size_len; i++)
+            {
+                size = (size << 32) | reg[pos++];
+            }
         }
 
         /* Ignore all blocks of memory above 2GB limit */
         if (base >= 0x80000000)
             continue;
+
+        /* Bound the usable interval before subtracting any board overlap. */
+        if (size > 0x80000000 - base) {
+            size = 0x80000000 - base;
+        }
+
+        /* A firmware RAM bank may straddle the Zorro III allocation area.
+         * Register its lower part normally, then apply the existing ConfigDev
+         * exclusion to the upper part, just as for two separate RAM banks. */
+        if (base < 0x40000000 && size > 0x40000000 - base)
+        {
+            remaining = size - (0x40000000 - base);
+            size = 0x40000000 - base;
+        }
 
         /* If block starts in ZorroIII space, find all ConfigDev and adjust base address */
         if (base >= 0x40000000)
@@ -68,9 +92,15 @@ void Add_DT_Memory(struct ExecBase *SysBase, APTR DeviceTreeBase)
                 if ((ULONG)cd->cd_BoardAddr < 0x40000000)
                     continue;
 
-                if (base < (ULONG)cd->cd_BoardAddr + cd->cd_BoardSize)
+                uint64_t board_base = (ULONG)cd->cd_BoardAddr;
+                uint64_t board_end = board_base + cd->cd_BoardSize;
+                uint64_t end = base + size;
+
+                /* A later, disjoint board must not move this RAM interval.
+                 * Cap subtraction when a board covers the entire remainder. */
+                if (base < board_end && board_base < end)
                 {
-                    ULONG diff = (ULONG)cd->cd_BoardAddr + cd->cd_BoardSize - base;
+                    uint64_t diff = (board_end < end ? board_end : end) - base;
                     base += diff;
                     size -= diff;
                 }
@@ -79,10 +109,8 @@ void Add_DT_Memory(struct ExecBase *SysBase, APTR DeviceTreeBase)
             CloseLibrary(ExpansionBase);
         }
         
-        /* Trim remaining blocks to fit within 2GB space */
-        if ((base + size) > 0x80000000)
-        {
-            size = 0x80000000 - base;
+        if (size == 0) {
+            continue;
         }
 
         // Base was below 0x08000000? Check both ranges, below that base and above!

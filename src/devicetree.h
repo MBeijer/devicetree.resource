@@ -47,7 +47,9 @@ extern const char deviceIdString[];
 
 #define BASE_NEG_SIZE (11 * 6)
 #define BASE_POS_SIZE ((sizeof(struct DeviceTreeBase)))
+#ifndef DT_PRIORITY
 #define DT_PRIORITY     127
+#endif
 #define DT_VERSION      1
 #define DT_REVISION     4
 

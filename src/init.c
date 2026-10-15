@@ -145,12 +145,52 @@ APTR Init(REGARG(struct ExecBase *SysBase, "a6"))
 {
     struct DeviceTreeBase *DeviceTreeBase = NULL;
     struct ExpansionBase *ExpansionBase = NULL;
-    struct CurrentBinding binding;
+    struct CurrentBinding binding = {0};
 
     APTR base_pointer = NULL;
-    
+
+    /* A resource may be initialized by a dependency before the ROM bootstrap.
+       Reuse that instance instead of registering its resource and RAM twice. */
+    Forbid();
+    DeviceTreeBase = OpenResource((CONST_STRPTR)deviceName);
+    if (DeviceTreeBase != NULL)
+    {
+        Permit();
+        return DeviceTreeBase;
+    }
+
     ExpansionBase = (struct ExpansionBase *)OpenLibrary("expansion.library", 0);
+    if (!ExpansionBase)
+    {
+        Permit();
+        return NULL;
+    }
+
     GetCurrentBinding(&binding, sizeof(binding));
+    struct ConfigDev *board = binding.cb_ConfigDev;
+    BOOL bound = board && (ULONG)&rom_end - (ULONG)board->cd_BoardAddr < board->cd_BoardSize;
+
+    // Exec may initialize this ROM Resident directly during cold start.
+    // Resolve the owning expansion board through its public configuration list.
+    if (!bound)
+    {
+        board = NULL;
+
+        while ((board = FindConfigDev(board, -1, -1)))
+        {
+            if ((ULONG)&rom_end - (ULONG)board->cd_BoardAddr < board->cd_BoardSize)
+            {
+                break;
+            }
+        }
+    }
+
+    if (!board)
+    {
+        CloseLibrary((struct Library*)ExpansionBase);
+        Permit();
+        return NULL;
+    }
 
     base_pointer = AllocMem(BASE_NEG_SIZE + BASE_POS_SIZE, MEMF_PUBLIC | MEMF_CLEAR);
 
@@ -197,11 +237,18 @@ APTR Init(REGARG(struct ExecBase *SysBase, "a6"))
         /* Add non-autoconfig memory to the system */
         Add_DT_Memory(SysBase, DeviceTreeBase);
 
-        binding.cb_ConfigDev->cd_Flags &= ~CDF_CONFIGME;
-        binding.cb_ConfigDev->cd_Driver = DeviceTreeBase;
+        // Only the board's bound initialization claims the complete board.
+        // A direct cold-start call must leave its later ROM bootstrap eligible.
+        if (bound)
+        {
+            board->cd_Flags &= ~CDF_CONFIGME;
+        }
+
+        board->cd_Driver = DeviceTreeBase;
     }
 
     CloseLibrary((struct Library*)ExpansionBase);
 
+    Permit();
     return DeviceTreeBase;
 }

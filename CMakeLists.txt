@@ -5,6 +5,7 @@ include(cmake/bin2h.cmake)
 include(cmake/verstring.cmake)
 include(cmake/sfdc.cmake)
 
+set(DEVICETREE_RESIDENT_PRIORITY 127 CACHE STRING "Resident cold-start priority")
 get_verstring(VERSTRING)
 sfdc(sfd/devicetree_lib.sfd)
 
@@ -26,8 +27,8 @@ add_executable(devicetree.resource
 
 bin_to_header(devicetree.resource)
 
-target_compile_options(devicetree.resource PRIVATE -Os -m68040 -msmall-code -fomit-frame-pointer)
-target_compile_definitions(devicetree.resource PRIVATE VERSION_STRING="${VERSTRING}")
+target_compile_options(devicetree.resource PRIVATE -Os -m68040 -msmall-code -fomit-frame-pointer -ffreestanding)
+target_compile_definitions(devicetree.resource PRIVATE VERSION_STRING="${VERSTRING}" DT_PRIORITY=${DEVICETREE_RESIDENT_PRIORITY})
 target_include_directories(devicetree.resource PRIVATE include)
 target_link_options(devicetree.resource PRIVATE -ffreestanding -nostdlib -nostartfiles -s -Wl,-e_rom_start -Wl,-T${CMAKE_CURRENT_SOURCE_DIR}/ldscript.lds)
 target_link_libraries(devicetree.resource devicetree)
